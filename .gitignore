@@ -1,0 +1,17 @@
+# Ortam değişkenleri (gerçek secret'lar)
+.env
+*/.env
+**/.env
+
+# Go build çıktıları / derlenmiş binary'ler
+catalog-service/catalog
+catalog-service/catalog-service
+order-service/order
+order-service/order-service
+*.exe
+*.out
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
