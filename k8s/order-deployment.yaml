@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  labels:
+    app: order
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: order
+  template:
+    metadata:
+      labels:
+        app: order
+    spec:
+      containers:
+      - name: order
+        image: order-service
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8081
+        env: 
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: postgresql-secret
+                key:  database-url

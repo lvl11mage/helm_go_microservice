@@ -15,3 +15,5 @@ order-service/order-service
 .vscode/
 .idea/
 .DS_Store
+
+k8s/postgresql-secret.yaml
