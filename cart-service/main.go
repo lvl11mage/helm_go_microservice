@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/MicahParks/keyfunc/v3"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -32,10 +36,67 @@ func ParseJSON(r *http.Request, payload any) error {
 }
 
 var redisClient *redis.Client
+var k keyfunc.Keyfunc
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		head := r.Header.Get("Authorization")
+
+		if head == "" {
+			response := map[string]any{
+				"message": "Error",
+				"order":   map[string]any{"message": "Missing authorization header"},
+			}
+			WriteJSONResponse(w, http.StatusUnauthorized, response)
+			return
+		}
+
+		signed := strings.TrimPrefix(head, "Bearer ")
+		parsed, err := jwt.Parse(signed, k.Keyfunc)
+		if err != nil {
+			log.Println("JWT parse failed:", err)
+			response := map[string]any{
+				"message": "Error",
+				"order":   map[string]any{"message": "Invalid or expired token"},
+			}
+
+			WriteJSONResponse(w, http.StatusUnauthorized, response)
+			return
+		}
+		log.Println("Token valid for:", parsed)
+
+		claims, ok := parsed.Claims.(jwt.MapClaims)
+		if !ok || !parsed.Valid {
+			response := map[string]any{
+				"message": "Error",
+				"order":   map[string]any{"message": "Invalid token claims"},
+			}
+			WriteJSONResponse(w, http.StatusUnauthorized, response)
+			return
+		}
+
+		userID := claims["sub"].(string)
+		ctx := context.WithValue(r.Context(), "user_id", userID)
+		next(w, r.WithContext(ctx))
+	}
+}
 
 func main() {
-	redisClient = redis.NewClient(&redis.Options{Addr: "redis:6379"})
+
+	jwksURL := os.Getenv("KEYCLOAK_JWKS_URL")
+	if jwksURL == "" {
+		log.Fatal("KEYCLOAK_JWKS_URL environment variable is not set")
+	}
 	ctx := context.Background()
+	var err error
+	k, err = keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+	if err != nil {
+
+		log.Fatalf("Failed to create a keyfunc.Keyfunc from the server's URL.\nError: %s", err)
+	}
+
+	redisClient = redis.NewClient(&redis.Options{Addr: "redis:6379"})
+
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		log.Fatal("Unable to connect to Redis", err)
 	}
@@ -44,11 +105,11 @@ func main() {
 
 	router := http.NewServeMux()
 
-	router.HandleFunc("GET /cart/{id}/", getCart)
-	router.HandleFunc("POST /cart/{id}/", addProductCart)
-	router.HandleFunc("DELETE /cart/{id}/", removeProductFromCart)
+	router.HandleFunc("GET /cart/", authMiddleware(getCart))
+	router.HandleFunc("POST /cart/", authMiddleware(addProductCart))
+	router.HandleFunc("DELETE /cart/", authMiddleware(removeProductFromCart))
 
-	err := http.ListenAndServe(":8082", router)
+	err = http.ListenAndServe(":8082", router)
 	if err != nil {
 		log.Fatal("Unable to connext server", err)
 	}
@@ -56,6 +117,13 @@ func main() {
 }
 
 func addProductCart(w http.ResponseWriter, r *http.Request) {
+
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok || userID == "" {
+		response := map[string]any{"message": "Error", "cart": map[string]any{"message": "User ID not found"}}
+		WriteJSONResponse(w, http.StatusUnauthorized, response)
+		return
+	}
 
 	var newProduct Product
 
@@ -73,10 +141,9 @@ func addProductCart(w http.ResponseWriter, r *http.Request) {
 	id := newProduct.ProductID
 	quantity := newProduct.Quantity
 
-	customerID := r.PathValue("id")
 	ctx := r.Context()
 
-	_, err2 := redisClient.HSet(ctx, "cart:"+customerID, id, quantity).Result()
+	_, err2 := redisClient.HSet(ctx, "cart:"+userID, id, quantity).Result()
 
 	if err2 != nil {
 		response := map[string]any{
@@ -86,7 +153,7 @@ func addProductCart(w http.ResponseWriter, r *http.Request) {
 		WriteJSONResponse(w, http.StatusInternalServerError, response)
 		return
 	}
-	err1 = redisClient.Expire(ctx, "cart:"+customerID, 30*time.Minute).Err()
+	err1 = redisClient.Expire(ctx, "cart:"+userID, 30*time.Minute).Err()
 
 	if err1 != nil {
 		log.Println("Warning: Failed to set TTL for cart:", err1)
@@ -101,9 +168,15 @@ func addProductCart(w http.ResponseWriter, r *http.Request) {
 
 func getCart(w http.ResponseWriter, r *http.Request) {
 
-	customerID := r.PathValue("id")
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok || userID == "" {
+		response := map[string]any{"message": "Error", "cart": map[string]any{"message": "User ID not found"}}
+		WriteJSONResponse(w, http.StatusUnauthorized, response)
+		return
+	}
+
 	ctx := r.Context()
-	cartData, err1 := redisClient.HGetAll(ctx, "cart:"+customerID).Result()
+	cartData, err1 := redisClient.HGetAll(ctx, "cart:"+userID).Result()
 
 	if err1 != nil {
 		response := map[string]any{
@@ -124,6 +197,13 @@ func getCart(w http.ResponseWriter, r *http.Request) {
 
 func removeProductFromCart(w http.ResponseWriter, r *http.Request) {
 
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok || userID == "" {
+		response := map[string]any{"message": "Error", "cart": map[string]any{"message": "User ID not found"}}
+		WriteJSONResponse(w, http.StatusUnauthorized, response)
+		return
+	}
+
 	var newProduct Product
 
 	err1 := ParseJSON(r, &newProduct)
@@ -137,12 +217,11 @@ func removeProductFromCart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customerID := r.PathValue("id")
 	ctx := r.Context()
 
 	product_id := newProduct.ProductID
 
-	_, err2 := redisClient.HDel(ctx, "cart:"+customerID, product_id).Result()
+	_, err2 := redisClient.HDel(ctx, "cart:"+userID, product_id).Result()
 	if err2 != nil {
 		response := map[string]any{
 			"message": "Error",

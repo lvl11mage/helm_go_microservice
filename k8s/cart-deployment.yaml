@@ -20,3 +20,6 @@ spec:
         imagePullPolicy: Never
         ports:
         - containerPort: 8082
+        env:
+        - name: KEYCLOAK_JWKS_URL
+          value: "http://keycloak-service:8080/realms/e-commerce/protocol/openid-connect/certs"

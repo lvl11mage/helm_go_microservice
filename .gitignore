@@ -11,6 +11,8 @@ order-service/order-service
 
 payment-service/payment-service
 shipping-service/shipping-service
+
+k8s/keycloak-secret.yaml
 *.exe
 *.out
 

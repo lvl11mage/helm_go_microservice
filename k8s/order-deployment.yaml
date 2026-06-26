@@ -31,3 +31,8 @@ spec:
               secretKeyRef:
                 name: rabbitmq-secret
                 key: rabbitmq-url
+          - name: KEYCLOAK_JWKS_URL
+            valueFrom:
+              configMapKeyRef:
+                name: keycloak-config
+                key: jwks-url

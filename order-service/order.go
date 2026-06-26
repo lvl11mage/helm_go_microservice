@@ -8,16 +8,77 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/MicahParks/keyfunc/v3"
+	"github.com/golang-jwt/jwt/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rabbitmq/amqp091-go"
 )
 
 var db *sql.DB
 var rabbitChannel *amqp091.Channel
+var k keyfunc.Keyfunc
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		head := r.Header.Get("Authorization")
+
+		if head == "" {
+			response := map[string]any{
+				"message": "Error",
+				"order":   map[string]any{"message": "Missing authorization header"},
+			}
+			WriteJSONResponse(w, http.StatusUnauthorized, response)
+			return
+		}
+
+		signed := strings.TrimPrefix(head, "Bearer ")
+		parsed, err := jwt.Parse(signed, k.Keyfunc)
+		if err != nil {
+			log.Println("JWT parse failed:", err)
+			response := map[string]any{
+				"message": "Error",
+				"order":   map[string]any{"message": "Invalid or expired token"},
+			}
+
+			WriteJSONResponse(w, http.StatusUnauthorized, response)
+			return
+		}
+		log.Println("Token valid for:", parsed)
+
+		claims, ok := parsed.Claims.(jwt.MapClaims)
+		if !ok || !parsed.Valid {
+			response := map[string]any{
+				"message": "Error",
+				"order":   map[string]any{"message": "Invalid token claims"},
+			}
+			WriteJSONResponse(w, http.StatusUnauthorized, response)
+			return
+		}
+
+		userID := claims["sub"].(string)
+		ctx := context.WithValue(r.Context(), "user_id", userID)
+		next(w, r.WithContext(ctx))
+	}
+}
 
 func main() {
+
+	jwksURL := os.Getenv("KEYCLOAK_JWKS_URL")
+	if jwksURL == "" {
+		log.Fatal("KEYCLOAK_JWKS_URL environment variable is not set")
+	}
+
+	ctx := context.Background()
+	var err error
+	k, err = keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+	if err != nil {
+
+		log.Fatalf("Failed to create a keyfunc.Keyfunc from the server's URL.\nError: %s", err)
+	}
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("DATABASE_URL environment variable is not set")
@@ -59,7 +120,7 @@ func main() {
 
 	_, err3 := db.Exec(`CREATE TABLE IF NOT EXISTS orders (
 	id SERIAL PRIMARY KEY,
-	customer_id INT,
+	customer_id VARCHAR(255),
 	status VARCHAR(30),
 	total_amount NUMERIC,
 	created_at TIMESTAMPTZ,
@@ -85,12 +146,12 @@ func main() {
 	}
 	router := http.NewServeMux()
 
-	router.HandleFunc("POST /orders/", createOrder)
+	router.HandleFunc("POST /orders/", authMiddleware(createOrder))
 	http.ListenAndServe(":8081", router)
 }
 
 type CreateOrderRequest struct {
-	CustomerID int         `json:"customerId"`
+	CustomerID string      `json:"customerId"`
 	Items      []OrderItem `json:"items"`
 }
 type OrderItem struct {
@@ -111,7 +172,7 @@ type Product struct {
 
 type OrderCreatedEvent struct {
 	OrderID     int              `json:"order_id"`
-	CustomerID  int              `json:"customer_id"`
+	CustomerID  string           `json:"customer_id"`
 	TotalAmount float64          `json:"total_amount"`
 	Items       []OrderItemEvent `json:"items"`
 	CreatedAt   time.Time        `json:"created_at"`
@@ -155,6 +216,12 @@ func getProductFromCatalog(productID string) (Product, error) {
 }
 
 func createOrder(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok || userID == "" {
+		response := map[string]any{"message": "Error", "order": map[string]any{"message": "User ID not found in context"}}
+		WriteJSONResponse(w, http.StatusUnauthorized, response)
+		return
+	}
 
 	var orderRequest CreateOrderRequest
 
@@ -207,7 +274,7 @@ func createOrder(w http.ResponseWriter, r *http.Request) {
 INSERT INTO orders (customer_id, status, total_amount, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id
-`, orderRequest.CustomerID, "pending", total, time.Now(), time.Now()).Scan(&newOrderID)
+`, userID, "pending", total, time.Now(), time.Now()).Scan(&newOrderID)
 
 	if err_x != nil {
 		log.Println("Order insert failed:", err_x)
@@ -255,7 +322,7 @@ VALUES ($1, $2, $3, $4, $5)`, newOrderID,
 	var orderEvent OrderCreatedEvent
 
 	orderEvent.OrderID = newOrderID
-	orderEvent.CustomerID = orderRequest.CustomerID
+	orderEvent.CustomerID = userID
 	orderEvent.TotalAmount = total
 	orderEvent.CreatedAt = time.Now()
 
@@ -286,7 +353,7 @@ VALUES ($1, $2, $3, $4, $5)`, newOrderID,
 		return
 	}
 
-	err4 := rabbitChannel.PublishWithContext(context.Background(), "order_events", "", false, false, amqp091.Publishing{ContentType: "application/json", Body: body})
+	err4 := rabbitChannel.PublishWithContext(r.Context(), "order_events", "", false, false, amqp091.Publishing{ContentType: "application/json", Body: body})
 	if err4 != nil {
 		log.Println("Couldn't publish order event:", err4)
 		response := map[string]any{
