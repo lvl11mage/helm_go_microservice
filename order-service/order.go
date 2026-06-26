@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,9 +11,11 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/rabbitmq/amqp091-go"
 )
 
 var db *sql.DB
+var rabbitChannel *amqp091.Channel
 
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
@@ -34,6 +37,25 @@ func main() {
 	}
 
 	fmt.Println("Connected to the database")
+	url_r := os.Getenv("URL")
+
+	conn, err := amqp091.Dial(url_r)
+	if err != nil {
+		log.Fatal(err, "Failed to connect to RabbitMQ")
+	}
+	defer conn.Close()
+	rabbitChannel, err1 = conn.Channel()
+	if err1 != nil {
+		log.Fatal(err1, "Failed to connect to channel")
+	}
+
+	defer rabbitChannel.Close()
+
+	err = rabbitChannel.ExchangeDeclare("order_events", "fanout", true, false, false, false, nil)
+
+	if err != nil {
+		log.Fatal(err, "Failed to declare exchange")
+	}
 
 	_, err3 := db.Exec(`CREATE TABLE IF NOT EXISTS orders (
 	id SERIAL PRIMARY KEY,
@@ -85,6 +107,21 @@ type Product struct {
 	ID    string  `json:"id"`
 	Name  string  `json:"name"`
 	Price float64 `json:"price"`
+}
+
+type OrderCreatedEvent struct {
+	OrderID     int              `json:"order_id"`
+	CustomerID  int              `json:"customer_id"`
+	TotalAmount float64          `json:"total_amount"`
+	Items       []OrderItemEvent `json:"items"`
+	CreatedAt   time.Time        `json:"created_at"`
+}
+
+type OrderItemEvent struct {
+	ProductID   string  `json:"product_id"`
+	ProductName string  `json:"product_name"`
+	UnitPrice   float64 `json:"unit_price"`
+	Quantity    int     `json:"quantity"`
 }
 
 func WriteJSONResponse(w http.ResponseWriter, status int, v any) error {
@@ -213,6 +250,57 @@ VALUES ($1, $2, $3, $4, $5)`, newOrderID,
 		}
 		WriteJSONResponse(w, http.StatusInternalServerError, response)
 		return
+	}
+
+	var orderEvent OrderCreatedEvent
+
+	orderEvent.OrderID = newOrderID
+	orderEvent.CustomerID = orderRequest.CustomerID
+	orderEvent.TotalAmount = total
+	orderEvent.CreatedAt = time.Now()
+
+	for l := range validatedItems {
+		var orderItemEvent OrderItemEvent
+		orderItemEvent.ProductID = validatedItems[l].ID
+		orderItemEvent.ProductName = validatedItems[l].Name
+		orderItemEvent.UnitPrice = validatedItems[l].Price
+		orderItemEvent.Quantity = orderRequest.Items[l].Quantity
+
+		orderEvent.Items = append(orderEvent.Items, orderItemEvent)
+	}
+
+	body, err3 := json.Marshal(orderEvent)
+
+	if err3 != nil {
+		log.Println("Couldn't marshal order event:", err3)
+		response := map[string]any{
+			"message": "Done",
+			"order": map[string]any{
+				"id":     newOrderID,
+				"total":  total,
+				"status": "pending",
+			},
+			"warning": "Order created but event could not be published",
+		}
+		WriteJSONResponse(w, http.StatusCreated, response)
+		return
+	}
+
+	err4 := rabbitChannel.PublishWithContext(context.Background(), "order_events", "", false, false, amqp091.Publishing{ContentType: "application/json", Body: body})
+	if err4 != nil {
+		log.Println("Couldn't publish order event:", err4)
+		response := map[string]any{
+			"message": "Done",
+			"order": map[string]any{
+				"id":     newOrderID,
+				"total":  total,
+				"status": "pending",
+			},
+			"warning": "Order created but event could not be published",
+		}
+		WriteJSONResponse(w, http.StatusCreated, response)
+		return
+
 	}
 
 	response := map[string]any{

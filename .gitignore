@@ -8,6 +8,9 @@ catalog-service/catalog
 catalog-service/catalog-service
 order-service/order
 order-service/order-service
+
+payment-service/payment-service
+shipping-service/shipping-service
 *.exe
 *.out
 
@@ -17,3 +20,4 @@ order-service/order-service
 .DS_Store
 
 k8s/postgresql-secret.yaml
+rabbitmq-secret.yaml
