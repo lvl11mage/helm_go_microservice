@@ -20,3 +20,10 @@ spec:
             name: order-service
             port:
               number: 8081
+      - path: /cart
+        pathType: Prefix
+        backend:
+          service:
+            name: cart-service
+            port:
+            number: 8082
