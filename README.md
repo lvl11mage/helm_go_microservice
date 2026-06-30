@@ -160,3 +160,24 @@ resulting `OrderCreated` event:
 └── docker-compose.yml
 ```
 
+## What I Learned
+
+- **Event-driven decoupling.** Using a RabbitMQ fanout exchange lets `order-service` respond
+  immediately and stay completely unaware of payment/shipping. Adding a new consumer needs
+  zero changes to the producer — the practical payoff of loose coupling.
+- **Stateless authentication.** Validating JWTs locally against Keycloak's JWKS (instead of
+  calling the auth server on every request) keeps each service independent and scalable, and
+  removes a single point of failure on the hot path.
+- **Security through verified identity.** Deriving the user from the token's `sub` claim
+  rather than client input is what actually closed the IDOR vulnerability — trusting client
+  input is the root cause of a whole class of access-control bugs.
+- **Choosing storage per service.** Mapping each service to the right datastore — MongoDB
+  (flexible product documents), PostgreSQL (transactional orders), Redis (ephemeral carts
+  with a TTL) — instead of forcing one database everywhere.
+- **Stateful vs. stateless on Kubernetes.** Databases and brokers need StatefulSets with
+  persistent volumes, while the stateless Go services run as horizontally scalable
+  Deployments — and why that distinction matters.
+- **Containerization & orchestration.** Multi-stage Docker builds for small images, and
+  wiring the whole system together with Docker Compose locally and Kubernetes manifests
+  (Deployments, StatefulSets, Services, Ingress, Secrets, ConfigMap).
+
