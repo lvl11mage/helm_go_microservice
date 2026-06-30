@@ -11,6 +11,8 @@ order-service/order-service
 
 payment-service/payment-service
 shipping-service/shipping-service
+cart-service/cart-service
+catalog-service/hello
 
 k8s/keycloak-secret.yaml
 *.exe

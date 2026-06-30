@@ -26,4 +26,4 @@ spec:
           service:
             name: cart-service
             port:
-            number: 8082
+              number: 8082

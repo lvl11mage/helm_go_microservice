@@ -11,7 +11,7 @@ import (
 
 type OrderCreatedEvent struct {
 	OrderID     int              `json:"order_id"`
-	CustomerID  int              `json:"customer_id"`
+	CustomerID  string           `json:"customer_id"`
 	TotalAmount float64          `json:"total_amount"`
 	Items       []OrderItemEvent `json:"items"`
 	CreatedAt   time.Time        `json:"created_at"`
