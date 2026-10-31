@@ -2,21 +2,23 @@ FROM golang:1.26.4-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod .
-COPY go.sum .
-COPY order.go .
-
-
+COPY go.mod go.sum order.go ./
 RUN go mod download
 
-RUN go build -o order-service .
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o order-service .
 
 
-FROM alpine:latest AS runner
+FROM alpine:3.22
 
-WORKDIR /runner_path
+WORKDIR /app
 
 COPY --from=builder /app/order-service .
+
+ENV GOMEMLIMIT=512MiB
 
 EXPOSE 8081
 
