@@ -20,6 +20,6 @@ COPY --from=builder /app/catalog-service .
 
 ENV GOMEMLIMIT=512MiB
 
-EXPOSE 8080
+EXPOSE 8086
 
 CMD ["./catalog-service"]

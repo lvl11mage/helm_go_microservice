@@ -18,4 +18,6 @@ WORKDIR /runner_path
 
 COPY --from=builder /app/payment-service .
 
+EXPOSE 8083
+
 CMD ["./payment-service"]
